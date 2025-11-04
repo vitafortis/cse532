@@ -377,3 +377,173 @@ def by_sbom():
         db.session.rollback()
 
     return jsonify(result)
+
+@vuln_api.route("/api/v1/stats/packages", methods=["GET"])
+def stats_packages():
+    rows = (
+        PackageStat.query.order_by(PackageStat.times_requested.desc())
+        .limit(10)
+        .all()
+    )
+    result = [
+        {
+            "package": r.package,
+            "ecosystem": r.ecosystem,
+            "times_requested": r.times_requested,
+            "last_requested_at": r.last_requested_at.isoformat() if r.last_requested_at else None,
+        }
+        for r in rows
+    ]
+    return jsonify({"top_packages": result})
+
+
+from sqlalchemy import func
+
+@vuln_api.route("/api/v1/stats/endpoints", methods=["GET"])
+def stats_endpoints():
+    rows = (
+        db.session.query(
+            ApiRequest.endpoint,
+            func.count(ApiRequest.id),
+            func.avg(ApiRequest.package_count),
+            func.avg(ApiRequest.vuln_count),
+        )
+        .group_by(ApiRequest.endpoint)
+        .all()
+    )
+    result = [
+        {
+            "endpoint": r[0],
+            "requests": int(r[1]),
+            "avg_packages": round(float(r[2] or 0), 2),
+            "avg_vulns": round(float(r[3] or 0), 2),
+        }
+        for r in rows
+    ]
+    return jsonify({"endpoint_stats": result})
+
+@vuln_api.route("/api/v1/stats/recent", methods=["GET"])
+def stats_recent():
+    rows = ApiRequest.query.order_by(ApiRequest.created_at.desc()).limit(10).all()
+    result = [
+        {
+            "timestamp": r.created_at.isoformat(),
+            "endpoint": r.endpoint,
+            "client_ip": r.client_ip,
+            "packages": r.package_count,
+            "vulns": r.vuln_count,
+        }
+        for r in rows
+    ]
+    return jsonify({"recent_requests": result})
+
+@vuln_api.route("/api/v1/stats/summary", methods=["GET"])
+def stats_summary():
+    """
+    Returns a high-level summary of usage metrics for dashboards and reporting.
+    """
+    try:
+        # Count total requests
+        total_requests = db.session.query(ApiRequest).count()
+
+        # Sum total vulnerabilities and packages
+        totals = db.session.query(
+            db.func.sum(ApiRequest.vuln_count),
+            db.func.sum(ApiRequest.package_count)
+        ).first()
+        total_vulns = totals[0] or 0
+        total_packages = totals[1] or 0
+
+        # Find top 3 packages
+        top_packages = (
+            db.session.query(PackageStat.package, PackageStat.times_requested)
+            .order_by(PackageStat.times_requested.desc())
+            .limit(3)
+            .all()
+        )
+        top_list = [{"package": pkg, "times_requested": count} for pkg, count in top_packages]
+
+        # Find most recent request
+        latest = db.session.query(ApiRequest).order_by(ApiRequest.created_at.desc()).first()
+        latest_time = latest.created_at.isoformat() if latest else None
+
+        summary = {
+            "total_requests": total_requests,
+            "total_vulnerabilities_recorded": total_vulns,
+            "total_packages_processed": total_packages,
+            "top_packages": top_list,
+            "latest_request": latest_time,
+        }
+
+        return jsonify(summary), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+      
+@vuln_api.route("/api/v1/stats/all", methods=["GET"])
+def all_stats():
+    from sqlalchemy import func
+
+    total_requests = db.session.query(func.count(ApiRequest.id)).scalar() or 0
+    total_vulns = db.session.query(func.sum(ApiRequest.vuln_count)).scalar() or 0
+    total_packages = db.session.query(func.count(PackageStat.id)).scalar() or 0
+    latest_request = (
+        db.session.query(func.max(ApiRequest.created_at)).scalar()
+    )
+
+    top_packages = [
+        {
+            "package": p.package,
+            "ecosystem": p.ecosystem,
+            "times_requested": p.times_requested,
+            "last_requested_at": p.last_requested_at.isoformat()
+            if p.last_requested_at else None,
+        }
+        for p in PackageStat.query.order_by(PackageStat.times_requested.desc()).limit(10).all()
+    ]
+
+    endpoint_stats = [
+        {
+            "endpoint": e,
+            "requests": int(reqs),
+            "avg_packages": float(avg_pkgs or 0),
+            "avg_vulns": float(avg_vulns or 0),
+        }
+        for e, reqs, avg_pkgs, avg_vulns in db.session.query(
+            ApiRequest.endpoint,
+            func.count(ApiRequest.id),
+            func.avg(ApiRequest.package_count),
+            func.avg(ApiRequest.vuln_count),
+        ).group_by(ApiRequest.endpoint).all()
+    ]
+
+    recent = [
+        {
+            "timestamp": r.created_at.isoformat(),
+            "endpoint": r.endpoint,
+            "vulns": r.vuln_count,
+            "packages": r.package_count,
+            "ip": r.client_ip,
+        }
+        for r in ApiRequest.query.order_by(ApiRequest.created_at.desc()).limit(10).all()
+    ]
+
+    return jsonify({
+        "summary": {
+            "total_requests": total_requests,
+            "total_vulnerabilities": total_vulns,
+            "total_packages": total_packages,
+            "latest_request": latest_request.isoformat() if latest_request else None,
+        },
+        "top_packages": top_packages,
+        "endpoint_stats": endpoint_stats,
+        "recent_activity": recent,
+    })
+
+      
+from flask import render_template
+
+@vuln_api.route("/dashboard", methods=["GET"])
+def dashboard():
+    return render_template("dashboard.html")

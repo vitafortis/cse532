@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vulnerability API Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; background: #f4f4f4; }
+    h1 { text-align: center; }
+    .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    canvas { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>📊 Vulnerability API Dashboard</h1>
+
+  <div class="card" id="summary">
+    <h2>Summary</h2>
+    <p><b>Total Requests:</b> <span id="reqs"></span></p>
+    <p><b>Total Packages Processed:</b> <span id="pkgs"></span></p>
+    <p><b>Total Vulnerabilities Recorded:</b> <span id="vulns"></span></p>
+    <p><b>Latest Request:</b> <span id="latest"></span></p>
+  </div>
+
+  <div class="card">
+    <h2>Top Packages</h2>
+    <canvas id="topChart"></canvas>
+  </div>
+
+  <script>
+    async function loadData() {
+      const res = await fetch('/api/v1/stats/summary');
+      const data = await res.json();
+
+      document.getElementById('reqs').textContent = data.total_requests;
+      document.getElementById('pkgs').textContent = data.total_packages_processed;
+      document.getElementById('vulns').textContent = data.total_vulnerabilities_recorded;
+      document.getElementById('latest').textContent = data.latest_request || 'N/A';
+
+      const ctx = document.getElementById('topChart').getContext('2d');
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: data.top_packages.map(p => p.package),
+          datasets: [{
+            label: 'Times Requested',
+            data: data.top_packages.map(p => p.times_requested),
+            backgroundColor: '#007bff'
+          }]
+        },
+        options: { scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
