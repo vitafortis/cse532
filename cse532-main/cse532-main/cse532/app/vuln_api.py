@@ -355,10 +355,34 @@ def by_sbom():
     # Sort by severity then date (desc)
     enriched.sort(key=_sort_key)
 
+    per_package_counts = {}
+    for (name, _) in uniq:
+        lower_name = name.lower()
+        per_package_counts[lower_name] = 0
+
+    for v in enriched:
+        # Try to map each vuln to its originating package (by name or in references)
+        matched_pkg = None
+        if v.get("id"):
+            # Basic heuristic — check for name hints
+            for pkg in per_package_counts:
+                if any(pkg in (ref.get("url", "").lower() or "") for ref in v.get("references", [])):
+                    matched_pkg = pkg
+                    break
+        if not matched_pkg and "aliases" in v:
+            # fallback: match alias text
+            for pkg in per_package_counts:
+                if any(pkg in a.lower() for a in v["aliases"]):
+                    matched_pkg = pkg
+                    break
+        if matched_pkg:
+            per_package_counts[matched_pkg] += 1
+            
     result = {
         "ecosystem": ecosystem,
         "packages_scanned": len(uniq),
         "total_vulnerabilities": len(enriched),
+        "vulnerabilities_by_package": per_package_counts,
         "vulnerabilities": enriched,
     }
 
@@ -371,8 +395,21 @@ def by_sbom():
             package_count=len(uniq),
             vuln_count=len(enriched),
         )
-        for name, _ in uniq:
-            PackageStat.bump(name, ecosystem)
+
+        for pkg_name, _ in uniq:
+            pkg_lower = pkg_name.lower()
+            stat = PackageStat.query.filter_by(package=pkg_lower, ecosystem=ecosystem).first()
+            if not stat:
+                stat = PackageStat(package=pkg_lower, ecosystem=ecosystem)
+                db.session.add(stat)
+            stat.times_requested = (stat.times_requested or 0) + 1
+            stat.last_requested_at = datetime.utcnow()
+
+            # NEW: log vulnerability totals per package if known
+            if pkg_lower in per_package_counts:
+                stat.total_vulns_recorded = (stat.total_vulns_recorded or 0) + per_package_counts[pkg_lower]
+
+        db.session.commit()
     except Exception:
         db.session.rollback()
 
@@ -390,6 +427,7 @@ def stats_packages():
             "package": r.package,
             "ecosystem": r.ecosystem,
             "times_requested": r.times_requested,
+	    "total_vulns_recorded": r.total_vulns_recorded,
             "last_requested_at": r.last_requested_at.isoformat() if r.last_requested_at else None,
         }
         for r in rows
@@ -540,6 +578,25 @@ def all_stats():
         "endpoint_stats": endpoint_stats,
         "recent_activity": recent,
     })
+
+@vuln_api.route("/api/v1/debug/packages", methods=["GET"])
+def debug_packages():
+    """
+    Debug endpoint — returns full package_stat table for quick inspection.
+    Safe to keep locally; remove or protect if deploying externally.
+    """
+    rows = PackageStat.query.order_by(PackageStat.times_requested.desc()).all()
+    result = [
+        {
+            "package": r.package,
+            "ecosystem": r.ecosystem,
+            "times_requested": r.times_requested,
+            "total_vulns_recorded": r.total_vulns_recorded,
+            "last_requested_at": r.last_requested_at.isoformat() if r.last_requested_at else None,
+        }
+        for r in rows
+    ]
+    return jsonify({"packages": result})
 
       
 from flask import render_template

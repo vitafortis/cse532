@@ -32,6 +32,7 @@ class PackageStat(db.Model):
     package = db.Column(db.String(256), index=True, nullable=False)
     ecosystem = db.Column(db.String(64), index=True, nullable=False, default="PyPI")
     times_requested = db.Column(db.Integer, default=0)
+    total_vulns_recorded = db.Column(db.Integer, default=0)
     last_requested_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     @staticmethod

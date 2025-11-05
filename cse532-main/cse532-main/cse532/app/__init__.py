@@ -19,3 +19,9 @@ with app.app_context():
     from . import views
 from .vuln_api import vuln_api
 app.register_blueprint(vuln_api)
+
+from flask import render_template
+
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
